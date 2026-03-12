@@ -10,7 +10,7 @@
 # Wneut	 : power flux with neutral particles [W/m^2]
 # Wheat	 : power flux due to particles impinging on wall [W/m^2]
 # Wpot	 : power flux due to recombination [W/m^2]
-# Whtpl	 : power flux due to plasma particles impinging on wall [W/m^2]
+# What'll	 : power flux due to plasma particles impinging on wall [W/m^2]
 # Wptpl	 : power flux due to plasma recombination [W/m^2]
 # xMP	 : radial coordinate in midplane (IMP for inner target(s), OMP for outer(s)) [m]
 # Rclfc	 : radial coordinate on target [m]

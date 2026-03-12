@@ -9,7 +9,6 @@ from natsort import natsorted
 import matplotlib.image as m
 
 from scipy import interpolate
-from scipy.integrate import quad, trapz, cumtrapz, odeint, solve_ivp
 from PIL import Image
 
 import matplotlib as mpl
@@ -18,8 +17,8 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import sys
 
 
-from UnpackSOLPS import unpackSOLPS, SOLring
-from AnalyticCoolingCurves import LfuncN
+from UnpackSOLPS import unpackSOLPS
+
 from scipy.optimize import curve_fit
 from SharedFunctions import return2d, ImportGridue, plotWALL
 import re
@@ -33,16 +32,13 @@ params = {
 }
 
 
-sys.path.append("D:\\my stuff\\PhD\\Theoretical_Detachment_Control_Scripts")
-from LipschultzDLS import ChInt, ChIntThermalForce, averageB
-
 plt.rcParams.update(params)
 
 customOrder = 0
 
 colors = ["#356288", "#fe1100", "#aacfdd", "#fe875d"]
-# customOrder = ["fi200E-3","fi250E-3","fi260E-3","fi262E-3","fi264E-3","fi270E-3","fi262E-3Backward","fi250E-3Backward","fi245E-3Backward","fi240E-3Backward","fi235E-3Backward","fi230E-3Backward","fi225E-3Backward","fi220E-3Backward"]
 gridcolors = ["#53ba83", "#059b9a", "#095169", "#0c0636", "000000"]
+heatcolors = ["#442288", "#6CA2EA", "#B5D33D", "#FED23F", "#EB7D5B"]
 
 
 def determineC0(Spar, C):
@@ -63,8 +59,8 @@ def find_nearest(array, value):
 
 def readWallflx(fname, targtype):
     # paramnames include: pdena for atom dens, pdenm for mol dens, volume for triangle volume
-    fortFile = fname + "//ld_tg_" + targtype + ".dat"
-    rootgrp = Dataset(fname + "//balance.nc", "r", format="NETCDF4")
+    fortFile = fname + "/ld_tg_" + targtype + ".dat"
+    rootgrp = Dataset(fname + "/balance.nc", "r", format="NETCDF4")
 
     rnew = (
         np.array(
@@ -122,10 +118,7 @@ def readWallflx(fname, targtype):
 
     peak = np.max(totalflx)
     peakind = np.argmax(totalflx)
-    print("recomb is", recombflx[peakind] * 1e-6)
-    print(peak * 1e-6)
-    # data.append(float(co[i]))
-    # print(r)
+
     return peak, total
 
 
@@ -135,10 +128,13 @@ def expFunc(x, A, B):
 
 def pressureBalance(rootgrp):
 
-    fmox_flua = np.sum(rootgrp["fmo_flua"], axis=0)[0]
+    fmox_flua = (
+        rootgrp["fmo_flua"][1][0]
+        + rootgrp["fmo_cvsa"][1][0]
+        + rootgrp["fmo_hybr"][1][0]
+    )
     b2mndr_hz = np.array(rootgrp["b2mndr_hz"])
 
-    pe = np.array(rootgrp["ne"]) * np.array(rootgrp["te"])
     dv = np.array(rootgrp["vol"])
     gs = np.array(rootgrp["gs"])
     hz = (1 - b2mndr_hz) + b2mndr_hz * (dv / gs[2])
@@ -153,8 +149,8 @@ def pressureBalance(rootgrp):
     apll = rootgrp["vol"] * hz / hx * abs(rootgrp["bb"][0] / rootgrp["bb"][3])
     ny = len(rootgrp["vol"])
     nx = len(rootgrp["vol"][0])
-    apllx = np.ones((ny, nx)) * 1000
-    apllc = np.ones((ny, nx)) * 1000
+    apllx = np.zeros((ny, nx))
+    apllc = np.zeros((ny, nx))
     for i in range(ny):
         for j in range(nx):
             if leftix[i, j] < 1:
@@ -191,30 +187,56 @@ def pressureBalance(rootgrp):
     b2stel_smq_rec_bal = np.sum(
         np.array(rootgrp["b2stel_smq_rec_bal"])[ion_indices], axis=0
     )
-    b2stel_smq_rec_bal = np.sum(
-        np.array(rootgrp["b2stel_smq_rec_bal"])[ion_indices], axis=0
+    b2stcx_smq = np.sum(np.array(rootgrp["b2stcx_smq_bal"])[ion_indices], axis=0)
+
+    b2stbr_phys_smo = np.sum(
+        np.array(rootgrp["b2stbr_phys_smo_bal"])[ion_indices], axis=0
+    )
+    b2stbr_bas_smo = np.sum(
+        np.array(rootgrp["b2stbr_bas_smo_bal"])[ion_indices], axis=0
+    )
+    b2srst_smo = np.sum(np.array(rootgrp["b2srst_smo_bal"])[ion_indices], axis=0)
+
+    b2srdt_smo = np.sum(np.array(rootgrp["b2srdt_smo_bal"])[ion_indices], axis=0)
+    b2srsm_smo = np.sum(np.array(rootgrp["b2srsm_smo_bal"])[ion_indices], axis=0)
+    b2stbc_smo = np.sum(np.array(rootgrp["b2stbc_smo_bal"])[ion_indices], axis=0)
+    ext_smo = np.sum(np.array(rootgrp["ext_smo_bal"])[ion_indices], axis=0)
+    b2stbm_smo = np.sum(np.array(rootgrp["b2stbm_smo_bal"])[ion_indices], axis=0)
+
+    b2sink = (
+        b2stel_smq_ion_bal
+        + b2stel_smq_rec_bal
+        + b2stcx_smq
+        + b2stbr_phys_smo
+        + b2stbr_bas_smo
+        + b2stbc_smo
+        + b2srst_smo
+        + b2srdt_smo
+        + b2srsm_smo
+        + ext_smo
+        + b2stbm_smo
     )
 
-    b2sink = b2stel_smq_ion_bal + b2stel_smq_rec_bal + b2stel_smq_rec_bal
     # b2sink = b2sink/apllc
+
     # eirene sinks
     eirene_mc_mapl_smo = np.sum(np.array(rootgrp["eirene_mc_mapl_smo_bal"]), axis=0)[1]
-    eirene_mc_mapl_smo = eirene_mc_mapl_smo / apllc
+    eirene_mc_mapl_smo = eirene_mc_mapl_smo
 
     eirene_mc_mmpl_smo_bal = np.sum(
         np.array(rootgrp["eirene_mc_mmpl_smo_bal"]), axis=0
     )[1]
-    eirene_mc_mmpl_smo_bal = eirene_mc_mmpl_smo_bal / apllc
+    eirene_mc_mmpl_smo_bal = eirene_mc_mmpl_smo_bal
 
     eirene_mc_cppv_smo_bal = np.sum(
         np.array(rootgrp["eirene_mc_cppv_smo_bal"]), axis=0
     )[1]
-    eirene_mc_cppv_smo_bal = eirene_mc_cppv_smo_bal / apllc
+    eirene_mc_cppv_smo_bal = eirene_mc_cppv_smo_bal
 
     eirene_mc_mipl_smo_bal = np.sum(
         np.array(rootgrp["eirene_mc_mipl_smo_bal"]), axis=0
     )[1]
-    eirene_mc_mipl_smo_bal = eirene_mc_mipl_smo_bal / apllc
+    eirene_mc_mipl_smo_bal = eirene_mc_mipl_smo_bal
 
     eireneSink = (
         eirene_mc_mapl_smo
@@ -222,12 +244,29 @@ def pressureBalance(rootgrp):
         + eirene_mc_mipl_smo_bal
         + eirene_mc_cppv_smo_bal
     )
-    fmox_flua = fmox_flua / apllx
-    raddiv_flu = raddiv_flu / apllc
+    fmox_flua = fmox_flua
+    raddiv_flu = raddiv_flu
     pi = np.sum(np.array(rootgrp["na"][ion_indices]), axis=0) * np.array(rootgrp["ti"])
+    pe = np.array(rootgrp["ne"]) * np.array(rootgrp["te"])
+
+    b2sigp_smogpi = np.sum(np.array(rootgrp["b2sigp_smogpi_bal"])[ion_indices], axis=0)
+    b2sigp_smogpe = np.sum(np.array(rootgrp["b2sigp_smogpe_bal"])[ion_indices], axis=0)
+    b2sigp_smogpgr = np.sum(
+        np.array(rootgrp["b2sigp_smogpgr_bal"])[ion_indices], axis=0
+    )
+    # thermal force etc
+    b2sifr_smofrea = np.sum(
+        np.array(rootgrp["b2sifr_smofrea_bal"])[ion_indices], axis=0
+    )
+    b2sifr_smofria = np.sum(
+        np.array(rootgrp["b2sifr_smofria_bal"])[ion_indices], axis=0
+    )
+    therm = b2sifr_smofrea + b2sifr_smofria
+    pressgrad = b2sigp_smogpi + b2sigp_smogpe + b2sigp_smogpgr
+    sinks = eireneSink + raddiv_flu + b2sink + therm
 
     # pi = np.sum(rootgrp["b2sigp_smogpi_bal"],axis=0)
-    return pe, pi, fmox_flua, eireneSink, raddiv_flu
+    return pressgrad + sinks, fmox_flua, sinks
 
 
 def plot2d(rootgrp, plotquantity, grid, ilim, norm, cmap, axs, plotmode="real"):
@@ -262,10 +301,10 @@ def plot2d(rootgrp, plotquantity, grid, ilim, norm, cmap, axs, plotmode="real"):
     # PLOT PFCs IN BLACK
     if plotmode == "real":
         if grid == "Tight":
-            plotWALL("balFiles\MAST_Tight//input.dat", axs)
+            plotWALL("balFiles/MAST_Tight/input.dat", axs)
         else:
 
-            plotWALL("balFiles\MAST_Open//input.dat", axs)
+            plotWALL("balFiles/MAST_Open/input.dat", axs)
 
 
 def CalculateSinks(rootgrp):
@@ -414,7 +453,9 @@ def CalculateSinks(rootgrp):
     return ion_heat, elec_heat
 
 
-def heatBalance(fname, rootgrp, quantities2d, XPTs, heatmode, heat_counts):
+def heatBalance(
+    fname, rootgrp, quantities2d, XPTs, heatmode, heat_counts, normalize=True
+):
 
     radsource = np.sum(quantities2d["radHeate"][1, :]) + np.sum(
         quantities2d["radHeati"][1, :]
@@ -439,12 +480,12 @@ def heatBalance(fname, rootgrp, quantities2d, XPTs, heatmode, heat_counts):
         + np.sum(b2stbc_shi_bal[:, -1])
     )
 
-    wallLoss = (
-        np.sum(b2stbc_she_bal[-1, 1:-1])
-        + np.sum(b2stbc_shi_bal[-1, 1:-1])
-        + np.sum(np.where(b2stbc_she_bal[0] <= 0, b2stbc_she_bal[0], 0))
-        + np.sum(np.where(b2stbc_she_bal[0] <= 0, b2stbc_shi_bal[0], 0))
-    )  # wall loss
+    # wallLoss = (
+    #     np.sum(b2stbc_she_bal[-1, 1:-1])
+    #     + np.sum(b2stbc_shi_bal[-1, 1:-1])
+    #     + np.sum(np.where(b2stbc_she_bal[0] <= 0, b2stbc_she_bal[0], 0))
+    #     + np.sum(np.where(b2stbc_she_bal[0] <= 0, b2stbc_shi_bal[0], 0))
+    # )  # wall loss
 
     fluidRad = np.sum(np.array(rootgrp["b2stel_she_bal"][0]))
 
@@ -473,7 +514,9 @@ def heatBalance(fname, rootgrp, quantities2d, XPTs, heatmode, heat_counts):
         + np.abs(totali)
         + np.abs(np.sum(atomrad) + np.sum(molrad) + np.sum(eionrad))
     )
-    wallLoss = radsource - tot
+    wallLoss = np.sum(quantities2d["radHeate"][-1, :]) + np.sum(
+        quantities2d["radHeati"][-1, :]
+    )
 
     totalsink = np.sum(rootgrp["b2stel_she_bal"], axis=0)[1:-1, 1:-1] + Hrad
     totalsink_Core = np.sum(
@@ -488,6 +531,8 @@ def heatBalance(fname, rootgrp, quantities2d, XPTs, heatmode, heat_counts):
         + np.sum(totalsink[:, XPTs[4] :])
     )
     # print("ratio is",totalsink_Div/(totalsink_SOL))
+    if not normalize:
+        radsource = 1
     if heatmode == "source_type":
 
         heat_counts["nitrogen"].append(np.abs(imprad) / radsource)
@@ -509,17 +554,16 @@ def heatBalance(fname, rootgrp, quantities2d, XPTs, heatmode, heat_counts):
             (np.abs(totali) + np.abs(totalo)) / radsource
         )
         heat_counts["non-radiative wall"].append(np.abs(wallLoss) / radsource)
-        print("ratio is", np.abs(totalsink_Div) / np.abs(totalsink_SOL))
     # heat_counts["other"].append(np.abs(other))
     return heat_counts
 
 
-def perform_Analysis(power, simFiles, collisionality=False):
+def perform_Analysis(power, collisionality=False):
 
     folderList = [
-        "balfiles\MAST_Tight\\" + power,
-        "balfiles\MAST_Open\\" + power,
-        # "balfiles\MAST_Open\\12MWpump"
+        "balFiles/MAST_Tight/" + power,
+        "balFiles/MAST_Open/" + power,
+        # "balFiles/MAST_Open/12MWpump"
     ]
 
     plt.rcParams["axes.labelsize"] = "Large"
@@ -533,15 +577,18 @@ def perform_Analysis(power, simFiles, collisionality=False):
     fig5, axs5 = plt.subplots(1, 1, figsize=(6, 5.2))
     radheatfig, radheataxs = plt.subplots(1, 1, figsize=(6, 5.2))
     upstempfig, upstempaxs = plt.subplots(1, 1, figsize=(6, 5.2))
+    histfig, histaxs = plt.subplots(1, 1, figsize=(6, 5.2))
     fig6, axs6 = plt.subplots(
         1, 1, figsize=(6, 5.2)
     )  # axis for conductive/convective heat flux
     DLSfig, DLSaxs = plt.subplots(
         1, 1, figsize=(6, 5.2)
     )  # axis for losses along killer flux tube
+    ax12press = DLSaxs.twinx()
+    figPowertType, axspowerType = plt.subplots(1, 1, figsize=(6, 5.2))
     for folder in folderList:
 
-        Files = os.listdir(str(folder))
+        Files = [f for f in os.listdir(folder) if not f.startswith(".")]
         Files = natsorted(Files)
 
         frontpos = []
@@ -558,12 +605,28 @@ def perform_Analysis(power, simFiles, collisionality=False):
         radfraction = []
         colornum = 0
         Nu = []
+        collis = []
         Cdls = []
         if "Tight" in folder:
-            label = "Tight"
+            label = "Closed"
         else:
             label = "Open"
         detached = 0
+        heat_counts = {
+            "divertor radiation": [],
+            "main chamber SOL radiation": [],
+            "core radiation": [],
+            "non-radiative targets": [],
+            "non-radiative wall": [],
+        }
+        heat_counts_type = {
+            "nitrogen": [],
+            "hydrogen": [],
+            "non-radiative outer": [],
+            "non-radiative inner": [],
+            "non-radiative wall": [],
+        }
+        markerstyle = "o"
         for File in Files:
 
             if (
@@ -577,11 +640,11 @@ def perform_Analysis(power, simFiles, collisionality=False):
             # if "Tight" in folder and "12MW" in folder:
             #     if "ne9" in File or "ne10" in File:
             #         continue
-            fileName = str(folder) + "\\" + str(File) + "\\balance.nc"
+            fileName = str(folder) + "/" + str(File) + "/balance.nc"
             rootgrp = Dataset(str(fileName), "r", format="NETCDF4")
 
             SOLring1 = 0
-            RING = rootgrp["jsep"][0] + 4
+            RING = rootgrp["jsep"][0] + 5
             SEPARATRIX = rootgrp["jsep"][0] + 2
 
             # DETERMINE LOCATION OF X-POINTS
@@ -595,8 +658,28 @@ def perform_Analysis(power, simFiles, collisionality=False):
             quantities2d, SOLring1 = unpackSOLPS(
                 fileName, -1, RING, Xpoint=len(rootgrp["rightix"][0]) - midplaneix
             )
+
             quantities2d, rootg = return2d(fileName)
             Lpar = np.max(SOLring1.Spar)
+
+            heat_counts = heatBalance(
+                fileName[:-11],
+                rootgrp,
+                quantities2d,
+                XPTs,
+                heatmode="location",
+                heat_counts=heat_counts,
+                normalize=0,
+            )
+            heat_counts_type = heatBalance(
+                fileName[:-11],
+                rootgrp,
+                quantities2d,
+                XPTs,
+                heatmode="source_type",
+                heat_counts=heat_counts_type,
+                normalize=0,
+            )
 
             if colornum == 2:
                 cummDloss = -1 * np.cumsum(
@@ -606,8 +689,6 @@ def perform_Analysis(power, simFiles, collisionality=False):
                 cumImpLoss = -1 * np.cumsum(SOLring1.qf * SOLring1.V)
 
             pos = SOLring1.calcFrontTemp(5)
-
-            falpha.append(np.sqrt(SOLring1.determinefi()))
             partoPol = interpolate.interp1d(
                 SOLring1.Spar,
                 SOLring1.Spol,
@@ -616,11 +697,10 @@ def perform_Analysis(power, simFiles, collisionality=False):
                 bounds_error=False,
             )
             frontpos.append(partoPol(pos))
-            # print(rootgrp)
+
             ionFlux.append(rootg["fna_tot"][1][0][RING][-2])
-            peak, total = readWallflx(str(folder) + "\\" + str(File), "o")
+            peak, total = readWallflx(str(folder) + "/" + str(File), "o")
             peakheatLoad.append(peak)
-            # plt.plot(SOLring1.Spar,SOLring1.cond)
             imprad = np.array(rootgrp["b2stel_she_bal"][1])
             imprad = np.cumsum(-1 * imprad[RING][XPTs[-1] :])
             eael = np.sum(np.array(rootgrp["eirene_mc_eael_she_bal"]), axis=0)
@@ -645,72 +725,114 @@ def perform_Analysis(power, simFiles, collisionality=False):
             )
             QF.append(imprad[-1])
             Nu.append(SOLring1.ne[-1])
-            # Ccalcs.append(SOLring1.returnCalculationsC())
+            Rrsep = 1000 * (
+                quantities2d["r"][:, midplaneix]
+                - quantities2d["r"][SEPARATRIX, midplaneix]
+            )
+            SOLwidtharg = find_nearest(Rrsep, 25)
+            # CALCULATE THE RADIAL-AVERAGED COLLISIONALITY IN THE SOL
+            collis.append(
+                10 ** (-16)
+                * np.trapezoid(
+                    y=quantities2d["ne"][SEPARATRIX:SOLwidtharg, midplaneix]
+                    * SOLring1.Spar[-1]
+                    / (quantities2d["te"][SEPARATRIX:SOLwidtharg, midplaneix] ** 2),
+                    x=Rrsep[SEPARATRIX:SOLwidtharg],
+                )
+                / (Rrsep[SOLwidtharg] - Rrsep[SEPARATRIX])
+            )
             radfraction.append(
                 imprad[-1] / ((quantities2d["qpar"] * quantities2d["Area"])[RING][-50])
             )
             colornum = colornum + 1
-            Cdls.append(
-                ChInt(
-                    SOLring1.Spar, SOLring1.B, SOLring1.Spar[-1], SOLring1.Spar[-1], pos
-                )
-            )
-            print("name is", fileName[-26:-11])
-            markerstyle = "o"
+            # Cdls.append(
+            #     ChInt(
+            #         SOLring1.Spar, SOLring1.B, SOLring1.Spar[-1], SOLring1.Spar[-1], pos
+            #     )
+            # )
+
             print(
                 "input particle flux",
                 np.sum(rootgrp["fne"][1][1, XPTs[0] : XPTs[1]])
                 + np.sum(rootgrp["fne"][1][1, XPTs[-2] : XPTs[-1]]),
             )
+            # print(
+            #     "output particle flux",
+            #     np.sum(rootgrp["fne"][1][-1, XPTs[0] : XPTs[1]])
+            #     + np.sum(rootgrp["fne"][1][-1, XPTs[-2] : XPTs[-1]]),
+            # )
+            # print(
+            #     "main chamber ioniz",
+            #     np.sum(rootgrp["eirene_mc_papl_sna_bal"][:, :, :, XPTs[0] : XPTs[1]])
+            #     + np.sum(
+            #         rootgrp["eirene_mc_papl_sna_bal"][:, :, :, XPTs[-2] : XPTs[-1]]
+            #     ),
+            # )
             if not detached:
                 if SOLring1.te[0] < 5:
+                    print("name is", fileName[-26:-11])
                     detached = 1
 
                     templabel = "Open"
                     tempcolor = gridcolors[2]
                     heatcolor = "#FF9B42"
+                    Linestyle = "--"
+                    markerstyle = "o"
                     if "Tight" in folder:
-                        templabel = "Tight"
+                        templabel = "Closed"
                         tempcolor = gridcolors[0]
                         heatcolor = "#8F250C"
                         markerstyle = "^"
+                        Linestyle = "-."
                     Spar = np.cumsum(quantities2d["sdiff"][RING, 57:-1])
                     Sparinner = np.cumsum(quantities2d["sdiff"][RING, 1:56])
-                    print("Tu is", np.max(quantities2d["te"][RING, 57:-1]))
-                    # print(np.array(rootgrp["na"][1]))
-                    print("nthresh is", SOLring1.ne[-1])
+
                     rad = np.sum(np.array(rootgrp["b2stel_she_bal"]), axis=0)
 
                     radWeighted_field = np.sum(quantities2d["TotalField"] * rad)
                     radWeighted_field = radWeighted_field / np.sum(rad)
-                    L = np.zeros(quantities2d["te"].shape)
-                    for ind0 in range(len(quantities2d["te"])):
-                        for ind1 in range(len(quantities2d["te"][ind0])):
-                            L[ind0][ind1] = LfuncN(quantities2d["te"][ind0][ind1])
-                    radWeighted_press = np.sum(rad / quantities2d["V"])
-                    radWeighted_press = np.sum(
-                        0.03 * quantities2d["ne"] ** 2 * L * quantities2d["V"]
-                    )
-                    radWeighted_press = radWeighted_press / np.sum(
-                        quantities2d["ne"] ** 2 * quantities2d["V"]
-                    )
+                    # L = np.zeros(quantities2d["te"].shape)
+                    # for ind0 in range(len(quantities2d["te"])):
+                    #     for ind1 in range(len(quantities2d["te"][ind0])):
+                    #         L[ind0][ind1] = LfuncN(quantities2d["te"][ind0][ind1])
+                    # radWeighted_press = np.sum(rad / quantities2d["V"])
+                    # radWeighted_press = np.sum(
+                    #     0.03 * quantities2d["ne"] ** 2 * L * quantities2d["V"]
+                    # )
+                    # radWeighted_press = radWeighted_press / np.sum(
+                    #     quantities2d["ne"] ** 2 * quantities2d["V"]
+                    # )
 
-                    radWeighted_func = np.sum(quantities2d["ne"] ** 2 * L * rad)
-                    radWeighted_func = radWeighted_func / np.sum(rad)
-                    # plt.show()
-                    # plt.hist(L.flatten(),weights=(quantities2d["ne"]*quantities2d["V"]).flatten())
-                    # plt.savefig("test"+power+".png")
-                    print("average field is ", radWeighted_field)
-                    print("average pressure is is ", radWeighted_press)
-                    print("average func is is ", radWeighted_func)
-                    print("radiation is", np.sum(rad))
-                    axs2.plot(
-                        Spar,
-                        quantities2d["te"][RING, 57:-1],
-                        color=tempcolor,
-                        label=templabel,
-                        linewidth=2,
+                    # radWeighted_func = np.sum(quantities2d["ne"] ** 2 * L * rad)
+                    # radWeighted_func = radWeighted_func / np.sum(rad)
+                    # # plt.show()
+                    # # plt.hist(L.flatten(),weights=(quantities2d["ne"]*quantities2d["V"]).flatten())
+                    # # plt.savefig("test"+power+".png")
+                    # print("average field is ", radWeighted_field)
+                    # print("average pressure is is ", radWeighted_press)
+                    # print("average func is is ", radWeighted_func)
+                    # print(
+                    #     "total density is",
+                    #     np.sum(
+                    #         (np.array(rootgrp["ne"]) * np.array(rootgrp["vol"]))[
+                    #             SEPARATRIX:, :
+                    #         ]
+                    #     ),
+                    # )
+                    sorted_indices = np.argsort(np.array(rootgrp["te"]).flatten())
+                    histaxs.hist(
+                        np.array(rootgrp["te"]).flatten()[sorted_indices] / 1.60e-19,
+                        bins=50,
+                        weights=(
+                            np.array(rootgrp["ne"]) * np.array(rootgrp["vol"])
+                        ).flatten()[sorted_indices]
+                        / 1e17,
+                        alpha=0.4,
                     )
+                    histaxs.set_xlim([0, 50])
+                    histfig.savefig("Figures//1.png")
+                    print("ionisation is", np.sum(rootgrp["eirene_mc_papl_sna_bal"]))
+
                     # axs2.plot(SOLring1.Spar,SOLring1.te,
                     #         color=tempcolor,label=templabel)
 
@@ -722,17 +844,6 @@ def perform_Analysis(power, simFiles, collisionality=False):
                     # plt.ylim([0,5E7])
                     # plt.xlim([0,70])
                     # plt.show()
-                    axs3.plot(
-                        Sparinner,
-                        quantities2d["te"][RING, 1:56],
-                        color=tempcolor,
-                        label=templabel,
-                    )
-
-                    Rrsep = 1000 * (
-                        quantities2d["r"][:, midplaneix]
-                        - quantities2d["r"][SEPARATRIX, midplaneix]
-                    )
 
                     popt, pcov = curve_fit(
                         expFunc,
@@ -740,7 +851,13 @@ def perform_Analysis(power, simFiles, collisionality=False):
                         quantities2d["qpar"][SEPARATRIX + 1 :, XPTs[-1]],
                         p0=[np.amax(quantities2d["qpar"][:, XPTs[-1]]), 4],
                     )
-                    print("width is", str(np.round(popt[1], 1)))
+                    poptn, pcov = curve_fit(
+                        expFunc,
+                        Rrsep[SEPARATRIX + 1 :],
+                        quantities2d["ne"][SEPARATRIX + 1 :, midplaneix],
+                        p0=[np.amax(quantities2d["ne"][:, midplaneix]), 4],
+                    )
+                    print("lambda_n = " + str(np.round(poptn[1], 1)) + "mm")
                     heatwidthlabel = (
                         templabel
                         + r", $\lambda_{q}$ = "
@@ -762,31 +879,65 @@ def perform_Analysis(power, simFiles, collisionality=False):
                     ] - (quantities2d["radHeate"] + quantities2d["radHeati"])[
                         SEPARATRIX + 1 :, midplaneix : XPTs[-1]
                     ]
+                    radTrans = (quantities2d["radHeate"] + quantities2d["radHeati"])[
+                        RING, midplaneix:-1
+                    ] - (quantities2d["radHeate"] + quantities2d["radHeati"])[
+                        RING + 1, midplaneix:-1
+                    ]
                     inmidplane = int((XPTs[1] + XPTs[0]) / 2)
                     # radTrans = (quantities2d["radHeate"]+quantities2d["radHeati"])[SEPARATRIX:-1,XPTs[0]:inmidplane]-(quantities2d["radHeate"]+quantities2d["radHeati"])[SEPARATRIX+1:,XPTs[0]:inmidplane]
                     # print("total rad trans is",np.sum(radTrans)*10**(-6))
-                    radTrans = (
-                        np.sum(radTrans, axis=1)
-                        / quantities2d["Area"][SEPARATRIX:-1, XPTs[-1]]
-                    )
+                    # radTrans = (
+                    #     np.sum(radTrans, axis=1)
+                    #     / quantities2d["Area"][SEPARATRIX:-1, XPTs[-1]]
+                    # )
                     # print("average heat is",(trapz(SOLring1.cond,SOLring1.Spar)/np.sum(SOLring1.Spar))**(2/7))
                     # plt.plot(SOLring1.Spar,SOLring1.cond)
                     # plt.show()
+                    # axs0.plot(
+                    #     Rrsep,
+                    #     10 ** (-6) * (quantities2d["qpar"])[:, XPTs[-1]],
+                    #     color=heatcolor,
+                    #     label=heatwidthlabel,
+                    #     marker=markerstyle,
+                    # )
                     axs0.plot(
-                        Rrsep,
-                        10 ** (-6) * (quantities2d["qpar"])[:, XPTs[-1]],
+                        partoPol(SOLring1.Spar),
+                        np.cumsum(radTrans)[::-1],
+                        color=heatcolor,
+                        label=heatwidthlabel,
+                        marker=markerstyle,
+                    )
+                    axs0.plot(
+                        partoPol(SOLring1.Spar),
+                        np.cumsum(-1 * (quantities2d["imprad"])[RING, midplaneix:-1])[
+                            ::-1
+                        ],
+                        color=heatcolor,
+                        label=heatwidthlabel,
+                        marker=markerstyle,
+                    )
+                    axs0.plot(
+                        partoPol(SOLring1.Spar),
+                        np.cumsum(
+                            -1
+                            * (
+                                np.sum(
+                                    np.array(rootgrp["eirene_mc_eael_she_bal"]), axis=0
+                                )
+                            )[RING, midplaneix:-1]
+                        )[::-1],
                         color=heatcolor,
                         label=heatwidthlabel,
                         marker=markerstyle,
                     )
                     axs4.plot(
                         Rrsep,
-                        (quantities2d["ne"])[:, midplaneix],
+                        (quantities2d["ne"])[:, XPTs[-1] - 3],
                         color=heatcolor,
                         label=templabel,
                         marker=markerstyle,
                     )
-                    # axs5.plot(Rrsep,(quantities2d["te"])[:,midplaneix],color=heatcolor,label = heatwidthlabel,marker=markerstyle)
                     axs5.plot(
                         Rrsep[:],
                         (quantities2d["te"])[:, midplaneix],
@@ -794,62 +945,46 @@ def perform_Analysis(power, simFiles, collisionality=False):
                         label=heatwidthlabel,
                         marker=markerstyle,
                     )
-                    halflen = int(len(quantities2d["te"][RING, 57:-1]) / 2)
-                    # axs6.plot(Spar[:65],(quantities2d["qpar"])[RING,57+halflen:-1][::-1],color=heatcolor,label = heatwidthlabel)
-                    # axs6.plot(Spar[:65],(quantities2d["cond"])[RING,57+halflen:-1][::-1],color=heatcolor,
-                    #           linestyle = "--",label = "conductive")
+
                     radheat = quantities2d["radHeate"] + quantities2d["radHeati"]
-                    print(
-                        "heat flux entering outer",
-                        10 ** (-6)
-                        * np.sum(radheat[SEPARATRIX - 1, XPTs[-2] : XPTs[-1]]),
-                    )
-                    print(
-                        "heat flux entering inner",
-                        10 ** (-6) * np.sum(radheat[SEPARATRIX - 1, XPTs[0] : XPTs[1]]),
-                    )
-                    print(
-                        "i/o ratio",
-                        np.sum(radheat[SEPARATRIX, XPTs[-2] : XPTs[-1]])
-                        / np.sum(radheat[SEPARATRIX, XPTs[0] : XPTs[1]]),
-                    )
+
                     ion_heat, elec_heat = CalculateSinks(rootgrp)
                     totalsink = np.abs(
                         np.sum(ion_heat["sinks"], axis=0)
                         + np.sum(elec_heat["sinks"], axis=0)
                     )
-                    print(
-                        "inner loss",
-                        10 ** (-6)
-                        * (
-                            np.sum(totalsink[SEPARATRIX - 1 :, : XPTs[2]])
-                            + np.sum(totalsink[: SEPARATRIX - 1, : XPTs[0]])
-                            + np.sum(totalsink[: SEPARATRIX - 1, XPTs[1] : XPTs[2]])
-                        ),
-                    )
-                    print(
-                        "outer loss",
-                        10 ** (-6)
-                        * (
-                            np.sum(totalsink[SEPARATRIX - 1 :, XPTs[2] + 1 :])
-                            + np.sum(totalsink[: SEPARATRIX - 1, XPTs[4] :])
-                            + np.sum(totalsink[: SEPARATRIX - 1, XPTs[2] : XPTs[3]])
-                        ),
-                    )
-                    print(
-                        "inner target flux is",
-                        10 ** (-6)
-                        * np.sum(
-                            (quantities2d["iHeat"] + quantities2d["elHeat"])[:, 1]
-                        ),
-                    )
-                    print(
-                        "outer target flux is",
-                        10 ** (-6)
-                        * np.sum(
-                            (quantities2d["iHeat"] + quantities2d["elHeat"])[:, -2]
-                        ),
-                    )
+                    # print(
+                    #     "inner loss",
+                    #     10 ** (-6)
+                    #     * (
+                    #         np.sum(totalsink[SEPARATRIX - 1 :, : XPTs[2]])
+                    #         + np.sum(totalsink[: SEPARATRIX - 1, : XPTs[0]])
+                    #         + np.sum(totalsink[: SEPARATRIX - 1, XPTs[1] : XPTs[2]])
+                    #     ),
+                    # )
+                    # print(
+                    #     "outer loss",
+                    #     10 ** (-6)
+                    #     * (
+                    #         np.sum(totalsink[SEPARATRIX - 1 :, XPTs[2] + 1 :])
+                    #         + np.sum(totalsink[: SEPARATRIX - 1, XPTs[4] :])
+                    #         + np.sum(totalsink[: SEPARATRIX - 1, XPTs[2] : XPTs[3]])
+                    #     ),
+                    # )
+                    # print(
+                    #     "inner target flux is",
+                    #     10 ** (-6)
+                    #     * np.sum(
+                    #         (quantities2d["iHeat"] + quantities2d["elHeat"])[:, 1]
+                    #     ),
+                    # )
+                    # print(
+                    #     "outer target flux is",
+                    #     10 ** (-6)
+                    #     * np.sum(
+                    #         (quantities2d["iHeat"] + quantities2d["elHeat"])[:, -2]
+                    #     ),
+                    # )
 
                     axs6.plot(
                         Rrsep[1:-1],
@@ -858,11 +993,17 @@ def perform_Analysis(power, simFiles, collisionality=False):
                         marker=markerstyle,
                         label=templabel + " radial ion flux",
                     )
+                    print("ion flux is", rootgrp["fne"][1][1:-1, midplaneix][0])
                     totalionsink = np.array(rootgrp["eirene_mc_papl_sna_bal"])
                     totalionsink = np.sum(totalionsink, axis=0)[
                         1
                     ]  # /np.array(rootgrp['vol'])
-
+                    print(
+                        "location of max ionization is",
+                        Rrsep[
+                            np.argmax((totalionsink / quantities2d["V"])[:, midplaneix])
+                        ],
+                    )
                     axs6.plot(
                         Rrsep[1:-1],
                         np.cumsum(totalionsink[1:-1, midplaneix]),
@@ -922,27 +1063,114 @@ def perform_Analysis(power, simFiles, collisionality=False):
                         -1 * np.cumsum(totalsink[RING, midplaneix:-1])[::-1]
                     )
 
-                    pe, pi, fmox_flua, eirene, radtrans = pressureBalance(rootgrp)
+                    # calculate radiation region
+                    ind90rad = np.abs(np.cumsum(SOLring1.qf * SOLring1.V))
+                    ind90rad = ind90rad / np.max(ind90rad)
+                    ind90rad = find_nearest(ind90rad, 0.8)
 
-                    # plot losses along a SOL ring
-                    # DLSaxs.plot(SOLring1.Spar,np.cumsum(radtrans[RING,midplaneix:-1][::-1]),
-                    # color=heatcolor,label="dynamic",linestyle="--",)
-                    DLSaxs.plot(
+                    pe = (np.array(rootgrp["ne"]) * (np.array(rootgrp["te"])))[
+                        RING, midplaneix:-1
+                    ][::-1]
+                    pi = (np.array(rootgrp["ne"]) * (np.array(rootgrp["ti"])))[
+                        RING, midplaneix:-1
+                    ][::-1]
+                    pdyn = 2 * 1.67e-27 * SOLring1.ni * SOLring1.FlowVelocity**2
+                    ptot = (
+                        np.array(rootgrp["ne"])
+                        * (np.array(rootgrp["te"]) + np.array(rootgrp["ti"]))
+                    )[RING, midplaneix:-1][::-1] + pdyn
+                    if "Tight" in folder:
+                        DLSaxs.plot(
+                            partoPol(SOLring1.Spar),
+                            SOLring1.cond * 1e-6,
+                            color=gridcolors[0],
+                            label=templabel + " P" + r"$_{e}$",
+                            marker="^",
+                        )
+                        ax12press.plot(
+                            SOLring1.Spar,
+                            SOLring1.te,
+                            color=heatcolor,
+                            label=templabel + " T",
+                            linestyle="-.",
+                        )
+                    else:
+                        axs3.fill_between(
+                            [SOLring1.Spar[0], SOLring1.Spar[ind90rad]],
+                            # 2 * 1.67e-27 * SOLring1.ni * SOLring1.FlowVelocity**2,
+                            [0, 0],
+                            [4, 4],
+                            color="grey",
+                            zorder=0,
+                            alpha=0.4,
+                            label="radiating region",
+                        )
+                        DLSaxs.plot(
+                            partoPol(SOLring1.Spar),
+                            SOLring1.cond * 1e-6,
+                            color=gridcolors[2],
+                            label=templabel + " P" + r"$_{e}$",
+                            marker="o",
+                        )
+                        ax12press.plot(
+                            SOLring1.Spar,
+                            SOLring1.te,
+                            color=heatcolor,
+                            label=templabel + " T",
+                            linestyle="--",
+                        )
+                    pgrad, fmox_flua, presSinks = pressureBalance(rootgrp)
+
+                    axs3.plot(
                         SOLring1.Spar,
-                        (pe)[RING, midplaneix:-1][::-1],
+                        # 2 * 1.67e-27 * SOLring1.ni * SOLring1.FlowVelocity**2,
+                        pe / pe[-1],
                         color=heatcolor,
-                        label="electron static",
+                        # marker=markerstyle,
+                        label=templabel,
                     )
-                    # DLSaxs.plot(SOLring1.Spar,-1*np.cumsum(quantities2d["imprad"][RING,midplaneix:-1])[::-1],
-                    # color = heatcolor,linestyle="-.")
-                    # DLSaxs.plot(SOLring1.Spar,-1*radtransloss,
-                    # color=heatcolor,linestyle = "--")
-                    # DLSaxs.plot(SOLring1.Spar[:len(quantities2d["elHeat"][RING])-XPTs[4]-1],-1*np.cumsum(np.sum(rootgrp["eirene_mc_eael_she_bal"],axis=0)[RING,XPTs[4]:-1])[::-1],
-                    # color=heatcolor,linestyle = ":")
-                    # DLSaxs.plot(SOLring1.Spar,-1*np.array(radtransloss)+np.array(volumetricloss),
-                    # color=heatcolor,linestyle = ":")
-                    # DLSaxs.plot(SOLring1.Spar,SOLring1.ne*SOLring1.te,
-                    # color=heatcolor)
+                    print("up press is", SOLring1.Spar[-1])
+                    axs3.plot(
+                        SOLring1.Spar,
+                        # 2 * 1.67e-27 * SOLring1.ni * SOLring1.FlowVelocity**2,
+                        pi / pe[-1],
+                        color=heatcolor,
+                        # marker=markerstyle,
+                        # label=templabel,
+                        linestyle="--",
+                    )
+
+                    axs3.plot(
+                        SOLring1.Spar,
+                        # 2 * 1.67e-27 * SOLring1.ni * SOLring1.FlowVelocity**2,
+                        pdyn / pe[-1],
+                        color=heatcolor,
+                        # marker=markerstyle,
+                        # label=templabel,
+                        linestyle=":",
+                    )
+
+                    if templabel == "Closed":
+                        axs3.plot(
+                            partoPol(SOLring1.Spar)[0],
+                            pe[0] / pe[-1],
+                            color=heatcolor,
+                            label="P" + r"$_{e}$",
+                        )
+                        axs3.plot(
+                            partoPol(SOLring1.Spar)[0],
+                            pe[0] / pe[-1],
+                            color=heatcolor,
+                            linestyle="--",
+                            label="P" + r"$_{i}$",
+                        )
+                        axs3.plot(
+                            partoPol(SOLring1.Spar)[0],
+                            pe[0] / pe[-1],
+                            color=heatcolor,
+                            linestyle=":",
+                            label="P" + r"$_{dynamic}$",
+                        )
                     peakheatflux = -1 * np.min(radtransloss)
                     maximp = np.max(
                         -1
@@ -964,30 +1192,157 @@ def perform_Analysis(power, simFiles, collisionality=False):
                         )[::-1]
                     )
 
-                    print("")
-                    print("rad trans is", np.min(radtransloss))
-                    print("imp is", maximp / peakheatflux)
-                    print("upstream press is", SOLring1.ne[-1] * SOLring1.te[-1])
-                    print(
-                        "imp efficiency", maximp / (SOLring1.ne[-1] * SOLring1.te[-1])
-                    )
-                    print("ionisation is", maxionis / peakheatflux)
-                    print("")
+        if templabel == "Closed":
+            axspowerType.plot(
+                Nu[0],
+                np.array(heat_counts_type["nitrogen"][0]) * 1e-6,
+                color=heatcolors[0],
+                label="nitrogen radiation",
+            )
+            axspowerType.plot(
+                Nu[0],
+                (np.array(heat_counts_type["hydrogen"][0])) * 1e-6,
+                color=heatcolors[1],
+                linewidth=2,
+                linestyle="--",
+                label="hydrogen radiation",
+            )
+            axspowerType.plot(
+                Nu[0],
+                (np.array(heat_counts_type["hydrogen"][0])) * 1e-6,
+                color=heatcolors[3],
+                linewidth=2,
+                linestyle=":",
+                label="non-radiative PFCs",
+            )
+            axs2.plot(
+                Nu[0],
+                np.array(heat_counts["divertor radiation"][0]) * 1e-6,
+                color=heatcolors[0],
+                label="divertor radiation",
+            )
+            axs2.plot(
+                Nu[0],
+                np.array(heat_counts["divertor radiation"][0]) * 1e-6,
+                color=heatcolors[2],
+                label="main chamber radiation",
+                linewidth=2,
+                linestyle="--",
+            )
+            axs2.plot(
+                Nu[0],
+                np.array(heat_counts["divertor radiation"][0]) * 1e-6,
+                color=heatcolors[4],
+                label="non-radiative targets",
+                linewidth=2,
+                linestyle=":",
+            )
+            axs2.plot(
+                Nu[0],
+                np.array(heat_counts["divertor radiation"][0]) * 1e-6,
+                color=heatcolors[4],
+                label="non-radiative wall",
+                linewidth=2,
+                linestyle=":",
+            )
+        axspowerType.plot(
+            Nu[0],
+            np.array(heat_counts_type["nitrogen"][0]) * 1e-6,
+            color=heatcolors[0],
+            marker=markerstyle,
+            label=templabel,
+        )
+        axspowerType.plot(
+            Nu,
+            np.array(heat_counts_type["nitrogen"]) * 1e-6,
+            color=heatcolors[0],
+            marker=markerstyle,
+        )
+        axspowerType.plot(
+            Nu,
+            (np.array(heat_counts_type["hydrogen"])) * 1e-6,
+            color=heatcolors[1],
+            linewidth=2,
+            marker=markerstyle,
+            linestyle="--",
+        )
+        axspowerType.plot(
+            Nu,
+            (
+                np.array(heat_counts_type["non-radiative outer"])
+                + np.array(heat_counts_type["non-radiative inner"])
+                + np.array(heat_counts_type["non-radiative wall"])
+            )
+            * 1e-6,
+            color=heatcolors[3],
+            linewidth=2,
+            marker=markerstyle,
+            linestyle=":",
+        )
+
+        axs2.plot(
+            Nu[0],
+            np.array(heat_counts["divertor radiation"][0]) * 1e-6,
+            color=heatcolors[0],
+            label=templabel,
+            marker=markerstyle,
+        )
+
+        axs2.plot(
+            Nu,
+            np.array(heat_counts["divertor radiation"]) * 1e-6,
+            color=heatcolors[0],
+            marker=markerstyle,
+        )
+        axs2.plot(
+            Nu,
+            (
+                np.array(heat_counts["main chamber SOL radiation"])
+                + np.array(heat_counts["core radiation"])
+            )
+            * 1e-6,
+            color=heatcolors[2],
+            linewidth=2,
+            marker=markerstyle,
+            linestyle="--",
+        )
+        axs2.plot(
+            Nu,
+            (np.array(heat_counts["non-radiative targets"])) * 1e-6,
+            color=heatcolors[4],
+            linewidth=2,
+            marker=markerstyle,
+            linestyle=":",
+        )
+        axs2.plot(
+            Nu,
+            (np.array(heat_counts["non-radiative wall"])) * 1e-6,
+            color=heatcolors[4],
+            linewidth=2,
+            marker=markerstyle,
+            linestyle="-.",
+        )
         fig0.show()
         label = 0
         Tu = np.array(Tu)
         Qu = np.array(Qu)
         Nu = np.array(Nu)
-        peakheatLoad = np.array(peakheatLoad)
-        print(Nu)
-        C = Nu  # /(Qu**(5/7))
-        collis = 10 ** (-16) * Lpar * Nu / (Tu**2)
-        Cdls = np.array(Cdls)
-        index0 = determineC0(np.array(frontpos), C)
 
+        peakheatLoad = np.array(peakheatLoad)
+        C = Nu  # /(Qu**(5/7))
+        Cdls = np.array(Cdls)
+        index0 = determineC0(np.array(frontpos), C) + 1
+        print("nu is", C[index0])
         if "Tight" in folder:
-            axspress.plot(Tt, fmom, color=gridcolors[0], label="Tight")
-            label = "Tight pos"
+            axspress.plot(Tt, fmom, color=gridcolors[0], label="Closed")
+            label = "Closed pos"
+            axs1.plot(
+                [C[index0], C[index0]],
+                [-100, 100],
+                color="black",
+                label=r"$n_{u,thresh}$",
+            )
+
             if collisionality:
                 axs1.plot(
                     collis, frontpos, marker="^", label=label, color=gridcolors[0]
@@ -995,7 +1350,7 @@ def perform_Analysis(power, simFiles, collisionality=False):
                 ax12.plot(
                     collis,
                     peakheatLoad * 10 ** (-6),
-                    label="Tight flux",
+                    label="Closed flux",
                     color="#8F250C",
                     linestyle="-.",
                 )
@@ -1003,7 +1358,7 @@ def perform_Analysis(power, simFiles, collisionality=False):
                 axs1.plot(C, frontpos, marker="^", label=label, color=gridcolors[0])
 
                 ax12.plot(
-                    C, ionFlux, label="Tight flux", color="#8F250C", linestyle="-."
+                    C, ionFlux, label="Closed flux", color="#8F250C", linestyle="-."
                 )
 
         else:
@@ -1026,6 +1381,8 @@ def perform_Analysis(power, simFiles, collisionality=False):
                 ax12.plot(
                     C, ionFlux, label="Open flux", color="#FF9B42", linestyle="--"
                 )
+                axs1.plot([C[index0], C[index0]], [-100, 100], color="black")
+                axs1.set_ylim([-0.05, np.max(frontpos) * 1.1])
 
     ylabel = "s" + r"$_{f,pol}$" + " [m]"
     poslabel = "s" + r"$_{||}$" + " [m]"
@@ -1055,7 +1412,7 @@ def perform_Analysis(power, simFiles, collisionality=False):
     axs0.set_ylabel("q" + r"$_{||}$" + " [MWm" + r"$^{-2}$" + "]")
 
     # axs0.set_ylabel("ionisation loss")
-    axs0.set_xlim([-5, 27])
+    # axs0.set_xlim([-5, 27])
     axs0.set_title(power)
     fig0.tight_layout()
     axs0.legend()
@@ -1097,30 +1454,29 @@ def perform_Analysis(power, simFiles, collisionality=False):
         bbox_inches="tight",
     )
 
-    axs2.plot([0, 0], [0, 200], color="black", linestyle="--")
-    axs2.annotate(text="upper target", xy=(1.5, 95))
-    axs2.plot([48.3, 48.3], [0, 200], color="black", linestyle="--")
-    axs2.annotate(text="lower target", xy=(36, 95))
-    axs2.set_ylim([0, 105])
-
-    axs2.set_xlabel("s" + r"$_{||}$" + " [m]")
-    axs2.set_ylabel("T [eV]")
+    axs2.set_xlabel("n" + r"$_{u}$" + " [m" + r"$^{-3}$" + "]")
+    axs2.set_ylabel("Power [MW]")
     axs2.set_title(power)
     axs2.legend()
-    fig2.savefig(
-        "Figures/outerTemp_Baffle" + power + ".png", dpi=800, bbox_inches="tight"
+    fig2.savefig("Figures/radiationScan" + power + ".png", dpi=800, bbox_inches="tight")
+    # fig0.savefig("Figures/heatlossBaffle.png",dpi=400,bbox_inches='tight')
+    axspowerType.set_xlabel("n" + r"$_{u}$" + " [m" + r"$^{-3}$" + "]")
+    axspowerType.set_ylabel("Power [MW]")
+    axspowerType.set_title(power)
+    axspowerType.legend()
+    figPowertType.savefig(
+        "Figures/radiationScanType" + power + ".png", dpi=800, bbox_inches="tight"
     )
     # fig0.savefig("Figures/heatlossBaffle.png",dpi=400,bbox_inches='tight')
-    axs3.plot([0, 0], [0, 200], color="black", linestyle="--")
-    axs3.annotate(text="lower target", xy=(1.5, 40))
-    axs3.plot([52.21, 52.21], [0, 200], color="black", linestyle="--")
-    axs3.annotate(text="upper target", xy=(40, 40))
-    axs3.set_ylim([0, 105])
-    axs3.set_xlabel("s" + r"$_{||}$" + " [m]")
-    axs3.set_ylabel("T [eV]")
+
+    axs3.set_xlabel("s" + " [m]")
+    axs3.set_ylabel("P/P" + r"$_{u}$")
+
+    axs3.set_title(power)
+    axs3.set_ylim([0, 1.8])
     axs3.legend()
     fig3.savefig(
-        "Figures/innerTemp_Baffle" + power + ".png", dpi=800, bbox_inches="tight"
+        "Figures/pressureProfile" + power + ".png", dpi=800, bbox_inches="tight"
     )
 
     radheataxs.set_xlabel(poslabel0)
@@ -1145,20 +1501,34 @@ def perform_Analysis(power, simFiles, collisionality=False):
         bbox_inches="tight",
     )
 
-    plt.show()
+    # plt.show()
+    plt.close()
 
-    DLSaxs.set_xlabel("s [m]")
-    DLSaxs.set_ylabel("pressure")
+    DLSaxs.set_xlabel("s" + r"$_{pol}$" + " [m]")
+    DLSaxs.set_ylabel(
+        "q" + r"$_{||,e}$" + " [MWm" + r"$^{-2}$" + "]", color=gridcolors[0]
+    )
+    # if power == "3MW":
+    #     DLSaxs.set_ylim([0, 140])
+    # elif power == "6MW":
+    #     DLSaxs.set_ylim([0, 255])
+    # else:
+    #     DLSaxs.set_ylim([0, 500])
     DLSaxs.set_title(power)
-    DLSaxs.legend()
+    DLSaxs.legend(loc=(0.02, 0.82))
     DLSfig.tight_layout()
+    ax12press.set_ylabel("T [eV]", color="#8F250C")
+    ax12press.tick_params(axis="y", labelcolor="#8F250C")
+    DLSaxs.tick_params(axis="y", labelcolor=gridcolors[0])
+    ax12press.legend(loc=(0.02, 0.65))
     DLSfig.savefig(
-        "Figures/Baffle_Profiles/pressureProfile" + power + ".png",
+        "Figures/Baffle_Profiles/upstreamtemp" + power + ".png",
         dpi=800,
         bbox_inches="tight",
     )
 
-    plt.show()
+    # plt.show()
+    plt.close()
 
     axspress.set_xlabel("Tt")
     axspress.set_ylabel("fmom")
@@ -1166,7 +1536,8 @@ def perform_Analysis(power, simFiles, collisionality=False):
         "Figures/Baffle_Profiles/fmom" + power + ".png", dpi=800, bbox_inches="tight"
     )
 
-    plt.show()
+    # plt.show()
+    plt.close()
 
 
 def heatBalance_Multiple_Sims(Simlist, heatmode):
@@ -1197,16 +1568,16 @@ def heatBalance_Multiple_Sims(Simlist, heatmode):
     Copen = []
     for fileName in Simlist:
 
-        rootgrp = Dataset(str(fileName) + "\\balance.nc", "r", format="NETCDF4")
+        rootgrp = Dataset(str(fileName) + "/balance.nc", "r", format="NETCDF4")
 
         SOLring1 = 0
         RING = rootgrp["jsep"][0] + 5
         SEPARATRIX = rootgrp["jsep"][0] + 2
 
         quantities2d, SOLring1 = unpackSOLPS(
-            str(fileName) + "\\balance.nc", -1, RING, Xpoint=52
+            str(fileName) + "/balance.nc", -1, RING, Xpoint=52
         )
-        quantities2d, rootg = return2d(str(fileName) + "\\balance.nc")
+        quantities2d, rootg = return2d(str(fileName) + "/balance.nc")
 
         # DETERMINE LOCATION OF X-POINTS
         XPTs = []
@@ -1232,16 +1603,15 @@ def heatBalance_Multiple_Sims(Simlist, heatmode):
 
     width = 0.5
 
-    threshaxs.plot(Powers, Ctight, marker="o", linewidth=2, label="Tight")
+    threshaxs.plot(Powers, Ctight, marker="o", linewidth=2, label="Closed")
     threshaxs.plot(Powers, Copen, marker="^", linewidth=2, label="Open")
     threshaxs.set_xlabel("Input Power [MW]")
     threshaxs.set_ylabel("threshold density [m" + r"$^{-3}$" + "]")
     threshaxs.legend()
-    threshfig.savefig("Figures\\threshbaffle.png", dpi=800, bbox_inches="tight")
+    threshfig.savefig("Figures/threshbaffle.png", dpi=800, bbox_inches="tight")
 
     bottom = np.zeros(len(threshSims))
-    print(heat_counts)
-    heatcolors = ["#442288", "#6CA2EA", "#B5D33D", "#FED23F", "#EB7D5B"]
+
     case = (
         "3MW \n open",
         "3MW \n tight",
@@ -1276,47 +1646,10 @@ def heatBalance_Multiple_Sims(Simlist, heatmode):
     baraxs.legend(fontsize=12)
     baraxs.set_ylabel("portion of input power", fontsize=16)
     barfig.savefig(
-        "Figures//heat_" + heatmode + "_baffle.png", dpi=400, bbox_inches="tight"
+        "Figures/heat_" + heatmode + "_baffle.png", dpi=400, bbox_inches="tight"
     )
     barfig.show()
     plt.rcParams.update({"font.size": 16})
-
-
-def plotGifs():
-    folderList = []
-
-    folderList = [
-        # "D:\\my stuff\\PhD\\IsolatedAnalysis\\balfiles\MAST_Tight",
-        "D:\\my stuff\\PhD\\IsolatedAnalysis\\balfiles\MAST_Open",
-    ]
-
-    for folder in folderList:
-        Files = os.listdir(str(folder))
-        Files = natsorted(Files)
-
-        if "Tight" in folder:
-            label = "Tight"
-        else:
-            label = "Open"
-        for File in Files:
-
-            if File == "input.dat":
-                continue
-            fileName = str(folder) + "/" + str(File)
-            rootgrp = Dataset(str(fileName), "r", format="NETCDF4")
-
-            # print(rootgrp)
-            Xpoint = -1
-            SOLring1 = 0
-            print(rootgrp["jsep"][0])
-            RING = rootgrp["jsep"][0] + 4
-
-            quantities2d, SOLring1 = unpackSOLPS(
-                fileName + "\\balance.nc", -1, RING, Xpoint=52
-            )
-            quantities2d, rootg = return2d(fileName + "\\balance.nc")
-            plot2d(rootg, quantities2d["te"])
-        # io.mimsave('Figures\\Te.gif', image_list, duration=0.5)
 
 
 import matplotlib.path as mpltPath
@@ -1324,7 +1657,7 @@ import matplotlib.path as mpltPath
 
 def readParam(fname, paramname):
     # paramnames include: pdena for atom dens, pdenm for mol dens, volume for triangle volume
-    fortFile = "balFiles//" + fname + ".46"
+    fortFile = "balFiles/" + fname + "//fort.46"
     dataFort = open(fortFile)
     tline = dataFort.readlines(1)
     linenum = 0
@@ -1348,7 +1681,7 @@ def readParam(fname, paramname):
 
 def readParam44(fname, paramname):
     # paramnames include: pdena for atom dens, pdenm for mol dens, volume for triangle volume
-    fortFile = fname + "//fort.44"
+    fortFile = fname + "/fort.44"
     dataFort = open(fortFile)
     tline = dataFort.readlines(1)
     linenum = 0
@@ -1370,19 +1703,31 @@ def readParam44(fname, paramname):
     return data
 
 
-def plotNeutrals():
+def plotNeutrals(power):
     fig = plt.figure(figsize=(4, 5))
 
     gs = fig.add_gridspec(1, 2, hspace=0, wspace=0)
     axs = gs.subplots(sharey="row")
     axscounter = 0
-    for fname in [
-        "MAST_Open\\3MW\\ne2.5",
-        "MAST_Tight\\3MW\\ne2.0",
-    ]:  # simulations at threshold of detachment
-        # for fname in ["MAST_Open\\12MWpump\\ne7.0","MAST_Tight\\12MW\\ne8.0"]:
+    P1 = np.array([[1.5, 1.6, 1.6, 1.5, 1.5], [-1.65, -1.65, -1.6, -1.6, -1.65]])
+    P1 = np.transpose(P1)
+    P2 = np.array([[1.45, 1.55, 1.55, 1.45, 1.45], [-0.1, -0.1, 0.1, 0.1, -0.1]])
+    P2 = np.transpose(P2)
+    fnames = []
+    if power == "3MW":
+        fnames = [
+            "MAST_Open/3MW/ne2.8",
+            "MAST_Tight/3MW/ne2.0",
+        ]
+    elif power == "12MW":
+        fnames = [
+            "MAST_Open/12MW/ne4.5",
+            "MAST_Tight/12MW/ne9.0",
+        ]
+    for fname in fnames:  # simulations at threshold of detachment
+        # for fname in ["MAST_Open/12MWpump/ne7.0","MAST_Tight/12MW/ne8.0"]:
         # get triangle x/y data
-        fd = open("balfiles\\" + fname + ".33", "r")
+        fd = open("balFiles/" + fname + "//fort.33", "r")
         dataTriangImport = fd.readlines()
         dataTriang = []
         for i in range(len(dataTriangImport)):
@@ -1395,7 +1740,7 @@ def plotNeutrals():
         datay = dataTriang[int(len(dataTriang) / 2) :]
 
         # get triangle indices
-        fd = open("balFiles\\" + fname + ".34", "r")
+        fd = open("balFiles/" + fname + "//fort.34", "r")
         indices = np.loadtxt(fd, skiprows=1, usecols=(1, 2, 3))
         axs[axscounter].set_aspect("equal")
         # axs[counter].set_xlim([0.4,0.9])
@@ -1433,11 +1778,6 @@ def plotNeutrals():
         TotalMainD = 0
         TotalDivE = 0
 
-        P1 = np.array([[1.5, 1.6, 1.6, 1.5, 1.5], [-1.65, -1.65, -1.6, -1.6, -1.65]])
-        P1 = np.transpose(P1)
-        P2 = np.array([[1.45, 1.55, 1.55, 1.45, 1.45], [-0.1, -0.1, 0.1, 0.1, -0.1]])
-        P2 = np.transpose(P2)
-
         divertorPolygon = mpltPath.Path(P1)
         MainChamberPolygon = mpltPath.Path(P2)
 
@@ -1471,13 +1811,19 @@ def plotNeutrals():
         print("average main is", avDensMain)
 
         if "Tight" in fname:
-            plotWALL("balFiles//MAST_Tight//input.dat", axs[axscounter])
+            plotWALL("balFiles/MAST_Tight/input.dat", axs[axscounter])
         else:
-            plotWALL("balFiles//MAST_Open//input.dat", axs[axscounter])
+            plotWALL("balFiles/MAST_Open/input.dat", axs[axscounter])
         # counter = counter+1
 
         axscounter = axscounter + 1
-    axs[1].set_title("3MW", x=-0.05)
+    axs[1].plot(P1[:, 0], P1[:, 1], color="#21A179")
+    axs[1].plot(P2[:, 0], P2[:, 1], color="#21A179")
+    axs[1].text(1.28, -1.29, "divertor n" + r"$_{0}$", fontsize=6)
+    axs[1].text(1.21, 1.29, "main chamber n" + r"$_{0}$", fontsize=6)
+    axs[1].arrow(1.62, 1.17, -0.12, -1, color="#21A179", width=0.007, zorder=100)
+    axs[1].arrow(1.5, -1.33, 0.05, -0.21, color="#21A179", width=0.007, zorder=101)
+    axs[1].set_title(power, x=-0.05)
     cbarax = plt.axes([1.1, 0.22, 0.01, 0.6], facecolor="none")
     cb1 = mpl.colorbar.ColorbarBase(
         cbarax, cmap=mpl.cm.plasma, orientation="vertical", norm=norm, label=clabel
@@ -1485,7 +1831,9 @@ def plotNeutrals():
     plt.subplots_adjust(wspace=0, hspace=0)
     plt.tight_layout(pad=0)
 
-    plt.savefig("Figures//Ddensity_Baffle.png", dpi=1000, bbox_inches="tight")
+    plt.savefig(
+        "Figures/Ddensity_Baffle" + power + ".png", dpi=1000, bbox_inches="tight"
+    )
     plt.show()
 
 
@@ -1506,21 +1854,37 @@ def plotEnergyCost(simFiles, power):
     for fileName in files:
 
         rootgrp = Dataset(str(fileName), "r", format="NETCDF4")
+        SEPARATRIX = rootgrp["jsep"][0] + 2
+        XPTs = []
+        for i in range(len(rootgrp["rightix"][0])):
+            if rootgrp["rightix"][0][i] != i:
+                XPTs.append(i)
+        XPTs = np.array(XPTs) + 1
+        print("xpt", XPTs)
         eirene_mc_papl_sna_bal = np.array(rootgrp["eirene_mc_papl_sna_bal"])
+        # print(rootgrp)
+        outer_ioniz_source = np.sum(
+            eirene_mc_papl_sna_bal[:, 1, :SEPARATRIX, 0 : XPTs[0]], axis=(1, 2)
+        )
+        # + np.sum(eirene_mc_papl_sna_bal[:, 1, :SEPARATRIX, XPTs[4] :], axis=(1, 2))
+
+        print("source is", outer_ioniz_source[0])
+        print("source is", outer_ioniz_source[3])
+
         eirene_mc_eael_she_bal = np.array(rootgrp["eirene_mc_eael_she_bal"])
         eirene_mc_eael_she_bal = np.sum(eirene_mc_eael_she_bal, axis=0)
         eirene_mc_papl_sna_bal = np.sum(eirene_mc_papl_sna_bal, axis=0)[1]
         average_cost = (
             np.sum(eirene_mc_eael_she_bal) / np.sum(eirene_mc_papl_sna_bal)
         ) / 1.60e-19
-        print("average cost is", average_cost)
-        print("ionisation is", np.sum(eirene_mc_papl_sna_bal))
+        # print("average cost is", average_cost)
         plotvar = eirene_mc_eael_she_bal / eirene_mc_papl_sna_bal
         plotvar = plotvar / 1.602e-19
+        plotvar = eirene_mc_papl_sna_bal
         grid = "Tight"
         if "Open" in fileName:
             grid = "Open"
-            rootgrp = Dataset(str(fileName), "r", format="NETCDF4")
+            rootgrp = Dataset(str(fileName) + "", "r", format="NETCDF4")
             eirene_mc_papl_sna_bal = np.array(rootgrp["eirene_mc_papl_sna_bal"])
             eirene_mc_eael_she_bal = np.array(rootgrp["eirene_mc_eael_she_bal"])
         if axscounter != 0:
@@ -1535,13 +1899,12 @@ def plotEnergyCost(simFiles, power):
         plot2d(
             rootgrp, plotvar, grid, ilim=0, norm=norm, cmap=cmap, axs=axs[axscounter]
         )
-        axs[axscounter].set_ylim([-2.2, 0])
         axs[axscounter].set_xlabel("R [m]")
         axs[axscounter].set_ylabel("Z [m]")
         axscounter = axscounter + 1
     axs[1].set_title(power, x=-0.05)
 
-    cbarax = plt.axes([1.1, 0.37, 0.01, 0.28], facecolor="none")
+    cbarax = plt.axes([1.1, 0.22, 0.01, 0.6], facecolor="none")
     cb1 = mpl.colorbar.ColorbarBase(
         cbarax,
         cmap=mpl.cm.plasma,
@@ -1553,15 +1916,15 @@ def plotEnergyCost(simFiles, power):
     plt.subplots_adjust(wspace=0, hspace=0)
     plt.tight_layout(pad=0)
 
+    plt.subplots_adjust(wspace=0, hspace=0)
+    plt.tight_layout(pad=0)
+
     plt.savefig(
         "Figures/Baffle_Profiles/" + power + "_ionis.png", dpi=1000, bbox_inches="tight"
     )
 
-    plt.show()
-    plt.close()
 
-
-def plotClosure(power):
+def plotClosure(simFiles, power):
 
     fig = plt.figure(figsize=(4, 5))
 
@@ -1597,6 +1960,7 @@ def plotClosure(power):
         currentsum = 0
         ionTarg_Current = np.array(quantities2d["parFluxi"])[1]
         ionTarg_Current = np.sum(ionTarg_Current[:, -1])
+        print("target current is", ionTarg_Current)
         for i in range(len(eirene_mc_papl_sna_bal[0]) - 1, -1, -1):
             currentsum = currentsum + np.sum(eirene_mc_papl_sna_bal[:, i])
             plotvar[:, i] = currentsum
@@ -1625,12 +1989,19 @@ def plotClosure(power):
 
         axs[axscounter].set_xlabel("R [m]")
         axs[axscounter].set_ylabel("Z [m]")
-        axs[axscounter].set_ylim([-2.2, -1.2])
-        axs[axscounter].set_xlim([0.6, 1.9])
+        # axs[axscounter].set_ylim([-2.2, -1.2])
+        # axs[axscounter].set_xlim([0.6, 1.9])
         norm = mpl.colors.Normalize(vmin=0, vmax=1)
         cmap = cm.plasma
+        print("trapping is", plotvar[1, XPTs[-1] + 15])
         plot2d(
-            rootgrp, plotvar, grid, ilim=0, norm=norm, cmap=cmap, axs=axs[axscounter]
+            rootgrp,
+            plotvar,
+            grid,
+            ilim=XPTs[-1] + 15,
+            norm=norm,
+            cmap=cmap,
+            axs=axs[axscounter],
         )
         axscounter = axscounter + 1
     axs[1].set_title(power, x=-0.05)
@@ -1704,7 +2075,7 @@ def plotLosses(power, degDetachment):
         SEPARATRIX = rootgrp["jsep"][0] + 2
         quantities2d, rootg = return2d(fileName)
 
-        RING = rootgrp["jsep"][0] + 4
+        RING = rootgrp["jsep"][0] + 5
 
         grid = "Tight"
         if "Open" in fileName:
@@ -1802,31 +2173,28 @@ def plotEvolution(power):
     else:
         files = [threshSims[4], threshSims[5], deepsims[4], deepsims[5]]
     for folder in [
-        "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Open\\"
-        + power
-        + "\\",
-        "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Tight\\"
-        + power
-        + "\\",
+        "balFiles/Mast_Open/" + power + "/",
+        "balFiles/Mast_Tight/" + power + "/",
     ]:
         axsnum = 0
         cmap = 0
-        files = os.listdir(folder)
-        # files = os.listdir("C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Open\\6MW")
+        files = [f for f in os.listdir(folder) if not f.startswith(".")]
+
+        # files = os.listdir("balFiles/Mast_Open/6MW")
         files = natsorted(files)
         if "Tight" in folder:
-            print("yes tight")
+
             axsnum = 1
             cmap = matplotlib.colors.LinearSegmentedColormap.from_list(
                 "", ["#F51A1A", "#691B09"]
             )
-            plotWALL("balFiles\MAST_Tight//input.dat", contaxs[axsnum])
+            plotWALL("balFiles/MAST_Tight/input.dat", contaxs[axsnum])
             files = files[1:]
         else:
             cmap = matplotlib.colors.LinearSegmentedColormap.from_list(
                 "", ["#FF9B42", "#974F10"]
             )
-            plotWALL("balFiles\MAST_Open//input.dat", contaxs[axsnum])
+            plotWALL("balFiles/MAST_Open/input.dat", contaxs[axsnum])
             files = files[1:]
 
         m = matplotlib.cm.ScalarMappable(
@@ -1839,8 +2207,8 @@ def plotEvolution(power):
             print(folder, file)
             colorplot = m.to_rgba(counter)
             fileName = folder + file
-            # fileName = "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Open\\6MW\\"+file
-            rootgrp = Dataset(str(fileName) + "\\balance.nc", "r", format="NETCDF4")
+            # fileName = "balFiles/Mast_Open/6MW/"+file
+            rootgrp = Dataset(str(fileName) + "/balance.nc", "r", format="NETCDF4")
 
             # DETERMINE LOCATION OF X-POINTS
             XPTs = []
@@ -1850,7 +2218,7 @@ def plotEvolution(power):
             XPTs = np.array(XPTs) + 1
             midplaneix = int((XPTs[-1] + XPTs[-2]) / 2)
             SEPARATRIX = rootgrp["jsep"][0] + 2
-            quantities2d, rootg = return2d(fileName + "\\balance.nc")
+            quantities2d, rootg = return2d(fileName + "/balance.nc")
 
             RING = rootgrp["jsep"][0] + 4
             CUMSUM = -1 * np.cumsum(
@@ -1869,7 +2237,7 @@ def plotEvolution(power):
             #                 quantities2d["z"][SEPARATRIX+4,midplaneix+halfind],
             #                 marker = "x",color="k")
 
-            grid = "Tight"
+            grid = "Closed"
             detachlabel = "detached"
             heatcolor = "#8F250C"
             if "Open" in fileName:
@@ -1915,8 +2283,28 @@ def plotEvolution(power):
                 colors=[colorplot],
                 label=label,
             )
-            if counter == 0 or counter == len(files) - 1:
 
+            print(
+                "10 ev point:",
+                Rrsep[
+                    SEPARATRIX
+                    + find_nearest(quantities2d["te"][SEPARATRIX:, XPTs[-1]], 10)
+                ],
+            )
+            print(
+                "tu",
+                quantities2d["te"][SEPARATRIX][midplaneix],
+            )
+            if counter == 0 or counter == len(files) - 1:
+                if counter == 0:
+                    contaxs[axsnum].plot(
+                        quantities2d["r"][SEPARATRIX],
+                        quantities2d["z"][SEPARATRIX],
+                        linestyle="--",
+                        color="black",
+                        label="separatrix",
+                    )
+                #     #     color=colorplot, label=label)
                 contaxs[axsnum].plot([-1], [0], color=colorplot, label=label)
                 #     axs.plot(Rrsep[1:-1],10**(-6)*(conv)[2:,midplaneix],
                 #         color=colorplot,linestyle = "-.",
@@ -1928,13 +2316,11 @@ def plotEvolution(power):
 
                 axslist[axsnum].plot(
                     Rrsep[RING - 2 :],
-                    1.60e-19
-                    * (quantities2d["ne"] * quantities2d["te"])[
-                        RING - 2 :, midplaneix + 10
-                    ],
+                    (quantities2d["te"])[SEPARATRIX:, XPTs[-1]],
                     color=colorplot,
                     label=label,
                 )
+
             #     # axs.plot(Rrsep[RING-2:],Pu/Pu[0],
             #     #     color=colorplot, label=label)
             #     # axs.plot(Rrsep[1:-1],-1E-6*np.sum(np.array(rootgrp["b2stel_she_bal"])[1][1:-1,XPTs[3]:XPTs[4]],axis=1),
@@ -1942,10 +2328,7 @@ def plotEvolution(power):
             else:
                 axslist[axsnum].plot(
                     Rrsep[RING - 2 :],
-                    1.60e-19
-                    * (quantities2d["ne"] * quantities2d["te"])[
-                        RING - 2 :, midplaneix + 10
-                    ],
+                    (quantities2d["te"])[SEPARATRIX:, XPTs[-1]],
                     color=colorplot,
                 )
             #     axs.plot(Rrsep[1:-1],1E-6*conv[2:,midplaneix],
@@ -1964,11 +2347,11 @@ def plotEvolution(power):
                 contaxs[axsnum].yaxis.set_visible(False)
             counter = counter + 1
     contaxs[0].set_xlim([0.6, 1.7])
-    contaxs[0].set_ylim([-2.2, 0])
+    contaxs[0].set_ylim([-2.2, -0.6])
     contaxs[1].set_xlim([0.6, 1.7])
-    contaxs[1].set_ylim([-2.2, 0])
-    axslist[0].set_ylim([0, 3e2])
-    axslist[1].set_ylim([0, 3e2])
+    contaxs[1].set_ylim([-2.2, -0.6])
+    # axslist[0].set_ylim([0, 3e2])
+    # axslist[1].set_ylim([0, 3e2])
     axslist[0].set_xlabel("R-R" + r"$_{sep}$" + " [mm]")
     axslist[1].set_xlabel("R-R" + r"$_{sep}$" + " [mm]")
     contaxs[0].set_xlabel("R [m]")
@@ -1980,9 +2363,9 @@ def plotEvolution(power):
     # plt.ylabel("T [eV]")
     # plt.ylabel("summed nitrogen radiation [MW]")
     # plt.ylabel("radial heat flux [MW]")
-    axslist[1].set_title("Tight")
+    axslist[1].set_title("Closed")
     axslist[0].set_title("Open")
-    contaxs[1].set_title("Tight")
+    contaxs[1].set_title("Closed")
     contaxs[0].set_title("Open")
     axslist[0].legend()
     axslist[1].legend()
@@ -1996,51 +2379,56 @@ def plotEvolution(power):
         "Figures/Baffle_Profiles/pressEvolution.png", dpi=1000, bbox_inches="tight"
     )
     contfig.savefig(
-        "Figures/Baffle_Profiles/contour.png", dpi=1000, bbox_inches="tight"
+        "Figures/Baffle_Profiles/contour.eps", format="eps", bbox_inches="tight"
     )
     plt.show()
     plt.close()
 
 
 deepsims = [
-    "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Open\\3MW\\ne3.1\\balance.nc",
-    "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Tight\\3MW\\ne6.0\\balance.nc",
-    "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Open\\6MW\\ne4.5\\balance.nc",
-    "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Tight\\6MW/ne10.0",
-    "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balfiles\MAST_Open\\12MW/\\ne7.0\\balance.nc",
-    "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Tight\\12MW/ne16.0",
+    "balFiles/Mast_Open/3MW/ne3.1/balance.nc",
+    "balFiles/Mast_Tight/3MW/ne6.0/balance.nc",
+    "balFiles/Mast_Open/6MW/ne4.5/balance.nc",
+    "balFiles/Mast_Tight/6MW/ne10.0/balance.nc",
+    "balFiles/MAST_Open/12MW/ne7.0/balance.nc",
+    "balFiles/Mast_Tight/12MW/ne16.0/balance.nc",
 ]
 
 threshSims = [
-    "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Open\\3MW\\ne2.8\\balance.nc",
-    "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Tight\\3MW\\ne2.0\\balance.nc",
-    "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Open\\6MW/ne3.2",
-    "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Tight\\6MW/ne4.0",
-    "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balfiles\MAST_Open\\12MW\\ne4.5\\balance.nc",
-    "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Tight\\12MW\\ne9.0\\balance.nc",
+    "balFiles/Mast_Open/3MW/ne2.6/balance.nc",
+    "balFiles/Mast_Tight/3MW/ne2.0/balance.nc",
+    "balFiles/Mast_Open/6MW/ne3.2/balance.nc",
+    "balFiles/Mast_Tight/6MW/ne4.0/balance.nc",
+    "balFiles/MAST_Open/12MW/ne4.5/balance.nc",
+    "balFiles/Mast_Tight/12MW/ne9.0/balance.nc",
 ]
 
 
 # threshSims = [
-#     "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Open\\3MW/ne2.8.nc",
-#     "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Tight\\3MW/ne2.0.nc",
-#     "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Open\\6MW/ne3.2.nc",
-#     "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Tight\\6MW/ne4.0.nc",
-#     "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balfiles\MAST_Open\\12MWpump/ne7.0.nc",
-#     "C:\\Users\cyd cowley\Desktop\PhD\IsolatedAnalysis\\balFiles\Mast_Tight\\12MW/ne9.0.nc",
+#     "balFiles/Mast_Open/3MW/ne2.8.nc",
+#     "balFiles/Mast_Tight/3MW/ne2.0.nc",
+#     "balFiles/Mast_Open/6MW/ne3.2.nc",
+#     "balFiles/Mast_Tight/6MW/ne4.0.nc",
+#     "balFiles/MAST_Open/12MWpump/ne7.0.nc",
+#     "balFiles/Mast_Tight/12MW/ne9.0.nc",
 # ]
 
+
 heatmode = "source_type"
-# heatmode= "location"
-# heatBalance_Multiple_Sims(threshSims,heatmode=heatmode)
+heatmode = "location"
+
+# heatBalance_Multiple_Sims(threshSims, heatmode=heatmode)
 power = "3MW"
-# power = "6MW"
+perform_Analysis(power, 0)
+power = "6MW"
+perform_Analysis(power, 0)
 power = "12MW"
-degDetachment = "Deep"
-degDetachment = "Thresh"
-perform_Analysis(power, threshSims, 1)
+perform_Analysis(power, 0)
+# degDetachment = "Deep"
+# degDetachment = "Thresh"
+# perform_Analysis(power, threshSims, 1)
 # plotEvolution(power)
-# plotLosses(power,degDetachment)
-# plotNeutrals()
-# plotEnergyCost(threshSims,power)
-# plotClosure(power)
+# plotLosses(power, degDetachment)
+# plotNeutrals(power)
+# plotEnergyCost(threshSims, power)
+# plotClosure(threshSims, power)
